@@ -60,7 +60,7 @@ def transient_adv_diff_1d(mu, order, nx, s, left_bc, right_bc, dt_num, steps, th
 
     return u_list, V.dofmap().dofs(), V.tabulate_dof_coordinates().T[0] #vertex_to_dof_map(V)
 
-def transient_adv_diff_1d_R11(mu, order, nx, s, left_bc, right_bc, dt_num, steps, theta_num):
+def transient_adv_diff_1d_R11(mu, order, nx, s, left_bc, right_bc, init_cond, dt_num, steps, method):
     # Input
     # mu:     diffusivity, constant
     # order:  element order. 1 = linear elements. 2 = quadratic elements.
@@ -84,7 +84,9 @@ def transient_adv_diff_1d_R11(mu, order, nx, s, left_bc, right_bc, dt_num, steps
     V = FunctionSpace(mesh_1d, 'CG', order)
     u = TrialFunction(V)
     w = TestFunction(V)
-    u0 = Function(V)
+    #u0 = Function(V)
+    u0 = project(init_cond, V)
+    
     
     u_list = []
 
@@ -100,11 +102,7 @@ def transient_adv_diff_1d_R11(mu, order, nx, s, left_bc, right_bc, dt_num, steps
     bc = [bc_L, bc_R]
     
     dt = Constant(dt_num)
-    theta = Constant(theta_num)
     one = Constant(1.0)
-    
-    #a = ( w*u/dt + theta*(w*Constant(adv)*u.dx(0) + Constant(mu)*inner(grad(w), grad(u))) )*dx
-    #L = ( w*u0/dt + w*s - (one-theta)*(w*Constant(adv)*u0.dx(0) + Constant(mu)*inner(grad(w), grad(u0))) )*dx
     
     def L(w, u):
         return w*Constant(adv)*u.dx(0) + Constant(mu)*inner(grad(w), grad(u))
@@ -112,11 +110,47 @@ def transient_adv_diff_1d_R11(mu, order, nx, s, left_bc, right_bc, dt_num, steps
     delta_u = u - u0
     W = 0.5
     ww = (w*s-L(w, u0))
-    LL = L(w, u - u0)
     
+    # The residual term used for stabilization
+    def R(u, u0):
+        return delta_u/dt + W*Constant(adv)*u.dx(0) - (s - Constant(adv)*u0.dx(0))
     
-    F = (w*delta_u/dt + W*LL - ww)*dx
-
+    # the stabilization constant. p. 232, Soulaimani and Fortin (1994), Codina (2000)
+    tau = Constant(1.0/(2.0/dt_num + 2.0*adv/h + 4.0*mu/h**2))
+    
+    if method=='Galerkin':
+        def P(w):
+            return Constant(0.0)
+        
+        F = (w*delta_u/dt + W*L(w, u - u0) - ww)*dx\
+        + tau*P(w)*R(u, u0)*dx
+    
+    elif method=='SUPG':
+        def P(w):
+            return W*Constant(adv)*w.dx(0)
+        
+        F = (w*delta_u/dt + W*L(w, u - u0) - ww)*dx\
+        + tau*P(w)*R(u, u0)*dx
+    
+    elif method=='GLS':
+        def P(w):
+            return w/dt + W*Constant(adv)*w.dx(0)
+        
+        F = (w*delta_u/dt + W*L(w, u - u0) - ww)*dx\
+        + tau*P(w)*R(u, u0)*dx
+    
+    # This is a wrong implementation.
+    elif method=='LS':
+        def P(w):
+            return W*Constant(adv)*w.dx(0)
+        
+        tau = dt
+        
+    
+        F = (w*delta_u/dt + W*L(w, u - u0) - ww)*dx\
+            + tau*P(w)*R(u, u0)*dx + w*R(u, u0)*dx
+        
+        
     a, L = lhs(F), rhs(F)
 
     u = Function(V)
@@ -128,7 +162,7 @@ def transient_adv_diff_1d_R11(mu, order, nx, s, left_bc, right_bc, dt_num, steps
 
     return u_list, V.dofmap().dofs(), V.tabulate_dof_coordinates().T[0] #vertex_to_dof_map(V)
 
-def transient_adv_diff_1d_R22(mu, order, nx, s, left_bc, right_bc, dt_num, steps, theta_num):
+def transient_adv_diff_1d_R22(mu, order, nx, s, left_bc, right_bc, init_cond, dt_num, steps, method):
     # Input
     # mu:     diffusivity, constant
     # order:  element order. 1 = linear elements. 2 = quadratic elements.
@@ -155,7 +189,8 @@ def transient_adv_diff_1d_R22(mu, order, nx, s, left_bc, right_bc, dt_num, steps
     V0 = V.sub(0).collapse()
     u = TrialFunction(V)
     w = TestFunction(V)
-    u0 = Function(V0)
+    #u0 = Function(V0)
+    u0 = project(init_cond, V0)
     
     u_list = []
 
@@ -171,26 +206,58 @@ def transient_adv_diff_1d_R22(mu, order, nx, s, left_bc, right_bc, dt_num, steps
     bc = [bc_L, bc_R]
     
     dt = Constant(dt_num)
-    theta = Constant(theta_num)
     one = Constant(1.0)
     
     def L(w, u):
         return w*Constant(adv)*u.dx(0) + Constant(mu)*inner(grad(w), grad(u))
     
-    delta_u = as_vector([w[0]*(u[0] - u0), w[1]*(u[1] - u[0])])
+    delta_u = as_vector([(u[0] - u0), (u[1] - u[0])])
     W = as_matrix([[7.0/24, -1.0/24], [13.0/24, 5.0/24]])
+    W_inv = inv(W)
+    WU = W*delta_u
     #ww = as_vector( [0.5*(w[0]*s-L(w[0], u[1])), 0.5*(w[1]*s-L(w[1], u0))] )
     LL = as_vector([L(w[0], u[0] - u0), L(w[1], u[1] - u[0])])
+    ww = as_vector([0.5, 0.5])
     
-    #a = ( w*u/dt + theta*L(w, u) )*dx
-    #L = ( w*u0/dt + w*s - (one-theta)*L(w, u0) )*dx
-
-    #F = dot( delta_u/dt + W*LL - ww, as_vector([1.0, 1.0]) )*dx
-    F = dot( delta_u/dt + W*LL, as_vector([1.0, 1.0]) )*dx - (0.5*(w[0]*s-L(w[0], u0)) + 0.5*(w[1]*s-L(w[1], u0)))*dx
+    # The residual term used for stabilization
+    def R(u, u0):
+        return delta_u/dt + W*Constant(adv)*delta_u.dx(0) - ww*(s - Constant(adv)*u0.dx(0))
     
-    #F = 24*w[0]*(u[0] - u0[0])/dt*dx - (-L(w[0], u[1]) + 8*L(v[0], u[0]) + 5*L(v[0], u0[0])) \
-    #    +24*w[1]*(u[1] - u[0])/dt*dx - ( 5*L(w[1], u[1]) + 8*L(v[1], u[0]) - L(v[1], u0[1]))
-
+    # the stabilization constant. p. 232, Soulaimani and Fortin (1994), Codina (2000)
+    tau = Constant(1.0/(2.0/dt_num + 2.0*adv/h + 4.0*mu/h**2))
+    
+    if method=='Galerkin':
+        F = dot( delta_u/dt, as_vector([w[0], w[1]]) )*dx\
+            + (L(w[0], WU[0]) + L(w[1], WU[1]))*dx \
+            + 0.5*(L(w[0], u0) + L(w[1], u0))*dx \
+            - (0.5*(w[0]*s) + 0.5*(w[1]*s))*dx
+        
+        #+ (w[0]*Constant(adv)*WU[0].dx(0) + w[1]*Constant(adv)*WU[1].dx(0) )*dx\
+        #+ Constant(mu)*inner(grad(w[0]), grad(WU[0]))*dx\
+        #+ Constant(mu)*inner(grad(w[1]), grad(WU[1]))*dx\
+        
+        #+ (0.5*w[0]*Constant(adv)*u0.dx(0) + 0.5*w[1]*Constant(adv)*u0.dx(0) )*dx\
+        #+ 0.5*Constant(mu)*inner(grad(w[0]), grad(u0))*dx\
+        #+ 0.5*Constant(mu)*inner(grad(w[1]), grad(u0))*dx\
+        
+    elif method=='SUPG':
+        def P(w):
+            return W*Constant(adv)*w.dx(0)
+        
+        tau = inv(W_inv/dt + Constant(2*adv/h + 4*mu/h**2)*Identity(2)).T * W_inv
+        
+        tauPw = tau*P(w)
+        
+        
+        F = dot( delta_u/dt, as_vector([w[0], w[1]]) )*dx \
+            + (L(w[0], WU[0]) + L(w[1], WU[1]))*dx \
+            + 0.5*(L(w[0], u0) + L(w[1], u0))*dx \
+            - (0.5*(w[0]*s) + 0.5*(w[1]*s))*dx \
+            + dot(tauPw[0], R(u, u0)[0])*dx \
+            + dot(tauPw[1], R(u, u0)[1])*dx
+        
+    
+    
     a, L = lhs(F), rhs(F)
 
     u = Function(V)
