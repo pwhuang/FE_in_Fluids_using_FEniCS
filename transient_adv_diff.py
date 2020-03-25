@@ -15,8 +15,12 @@ def transient_adv_diff_1d(mu, order, nx, s, left_bc, right_bc, dt_num, steps, th
 
     h = 1.0/nx
     adv = 1.0
-
-    Pe = adv*h/(2*mu)
+    
+    if mu > 0.0:
+        Pe = adv*h/(2*mu)
+    else:
+        Pe = 'inf'
+    
     CFL = adv*dt_num/h
     
     print('Peclet number = ', Pe)
@@ -74,8 +78,12 @@ def transient_adv_diff_1d_R11(mu, order, nx, s, left_bc, right_bc, init_cond, dt
 
     h = 1.0/nx
     adv = 1.0
-
-    Pe = adv*h/(2*mu)
+    
+    if mu > 0.0:
+        Pe = adv*h/(2*mu)
+    else:
+        Pe = 'inf'
+    
     CFL = adv*dt_num/h
     
     print('Peclet number = ', Pe)
@@ -176,8 +184,12 @@ def transient_adv_diff_1d_R22(mu, order, nx, s, left_bc, right_bc, init_cond, dt
 
     h = 1.0/nx
     adv = 1.0
+    
+    if mu > 0.0:
+        Pe = adv*h/(2*mu)
+    else:
+        Pe = 'inf'
 
-    Pe = adv*h/(2*mu)
     CFL = adv*dt_num/h
     
     print('Peclet number = ', Pe)
