@@ -1,6 +1,9 @@
 import numpy as np
-from dolfin import *
+from dolfinx.fem import *
+from dolfinx.mesh import create_interval, exterior_facet_indices
+from ufl import TrialFunction, TestFunction, dx, ds, dS, dot, inner, lhs, rhs
 from ufl.algebra import Abs
+from mpi4py import MPI
 
 def steady_adv_diff_1d(mu, order, nx, s, left_bc, right_bc):
     # Input
@@ -12,40 +15,36 @@ def steady_adv_diff_1d(mu, order, nx, s, left_bc, right_bc):
     # u:      the solution, dolfin function
     
     # mesh of 10 uniform linear elements
-    mesh_1d = IntervalMesh(nx, 0, 1)
+    mesh_1d = create_interval(MPI.COMM_WORLD, nx, (0.0, 1.0))
 
     h = 1.0/nx
     adv = 1.0
 
     Pe = adv*h/(2*mu)
     print('Peclet number = ', Pe)
-
-    V = FunctionSpace(mesh_1d, 'CG', order)
+    
+#     P1 = FiniteElement('Lagrange', mesh_1d.ufl_cell(), 1)
+    V = FunctionSpace(mesh_1d, ('CG', 1))
     u = TrialFunction(V)
     w = TestFunction(V)
+    
+    dofs_L = locate_dofs_geometrical(V, lambda x: np.isclose(x[0], 0.0))
+    dofs_R = locate_dofs_geometrical(V, lambda x: np.isclose(x[0], 1.0))
+        
+    uL, uR = Function(V), Function(V)
+    uL.vector.array = left_bc
+    uR.vector.array = right_bc
 
-    def boundary_L(x, on_boundary):
-        return on_boundary and near(x[0], 0, DOLFIN_EPS)
+    bcL, bcR = dirichletbc(uL, dofs_L), dirichletbc(uR, dofs_R)
 
-    def boundary_R(x, on_boundary):
-        return on_boundary and near(x[0], 1, DOLFIN_EPS)
-
-    bc_L = DirichletBC(V, Constant(left_bc), boundary_L)
-    bc_R = DirichletBC(V, Constant(right_bc), boundary_R)
-
-    bc = [bc_L, bc_R]
-
-    # Define Source term
-    #s = Constant(1.0)
-
-    F = Constant(adv)*w*u.dx(0)*dx + Constant(mu)*w.dx(0)*u.dx(0)*dx - w*s*dx
+    F = adv*w*u.dx(0)*dx + mu*w.dx(0)*u.dx(0)*dx - w*s*dx
 
     a, L = lhs(F), rhs(F)
 
-    u = Function(V)
-    solve(a==L, u, bcs=bc)
+    problem = petsc.LinearProblem(a, L, bcs=[bcL, bcR])
+    u = problem.solve()
     
-    return u, V.dofmap().dofs(), V.tabulate_dof_coordinates().T[0] #vertex_to_dof_map(V)
+    return u, V.tabulate_dof_coordinates().T[0] #vertex_to_dof_map(V)
 
 def solution_fig2_1(x_space, mu):
     adv = 1
@@ -238,7 +237,8 @@ def steady_adv_diff_1d_FV(mu, nx, s, left_bc, right_bc):
     
     n = FacetNormal(mesh_1d)
     
-    x_ = interpolate(Expression("x[0]", degree=1), V)
+    x_ = Function(V)
+    x_.interpolate(lambda x: x[0])
     Delta_h = sqrt(jump(x_)**2)
     
     boundary_markers = MeshFunction('size_t', mesh_1d, dim=0)
